@@ -6,3 +6,5 @@ transformers
 sentencepiece
 pillow
 openai
+coqui-tts
+torchaudio
