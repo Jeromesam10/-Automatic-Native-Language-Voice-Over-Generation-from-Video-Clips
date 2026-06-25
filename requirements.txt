@@ -8,3 +8,7 @@ pillow
 openai
 coqui-tts
 torchaudio
+langdetect
+soundfile
+numpy
+edge-tts
