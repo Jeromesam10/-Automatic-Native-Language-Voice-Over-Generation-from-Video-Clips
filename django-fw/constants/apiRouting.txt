@@ -1,0 +1,9 @@
+Summary of API Routing:
+
+/api/v1/voiceover/summarize - POST - Summarize frame descriptions into a voice-over paragraph
+/api/v1/voiceover/chat - POST - Chat with the voice-over model
+/api/v1/voiceover/translate - POST - Translate input text using DeepSeek
+/api/v1/voiceover/translation-languages - GET - List supported translation language codes
+/api/v1/voiceover/health - GET - Check the health of the voice-over model
+/api/v1/voiceover/generate-voiceover - POST - Convert narration text to speech (local TTS)
+/api/v1/voiceover/languages - GET - List supported TTS language codes

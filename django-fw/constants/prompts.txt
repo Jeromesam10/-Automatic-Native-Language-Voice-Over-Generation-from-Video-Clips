@@ -1,0 +1,24 @@
+**Prompt to generate a natural voice-over narration for a video.**
+
+Generate a natural voice-over narration for this video. Describe only what is clearly visible in the provided frame descriptions. Combine all frame descriptions into one smooth paragraph with a logical flow. Remove repeated information and avoid mentioning frames, timestamps, or metadata. Do not guess brands, time of day, weather, emotions, or actions unless they are explicitly visible. The narration should sound like a human describing the video while watching it. Keep it concise, around 80–120 words, and return only the narration.
+
+**Example Body:**
+{
+    "prompt": {
+  "task": "Generate a natural voice-over narration for this video. Describe only what is clearly visible in the provided frame descriptions. Combine all frame descriptions into one smooth paragraph with a logical flow. Remove repeated information and avoid mentioning frames, timestamps, or metadata. Do not guess brands, time of day, weather, emotions, or actions unless they are explicitly visible. The narration should sound like a human describing the video while watching it. Keep it concise, around 80–120 words, and return only the narration.",
+  "data": {
+    "objects": ["car"],
+    "frames": [
+      {
+        "description": "The image depicts an urban rooftop scene during dawn or dusk. A sleek black sports car is parked on the rooftop with its headlights illuminated. The car is positioned near a railing and greenery, with several tall buildings visible in the background."
+      },
+      {
+        "description": "The image depicts a rooftop scene with two luxury cars parked on a wooden platform. A black sports car is in the foreground with its headlights on, while a black SUV is parked behind it. The city skyline and a large mural are visible in the background."
+      },
+      {
+        "description": "The image depicts a luxurious rooftop scene with a black Lamborghini and a black Rolls-Royce SUV parked on a wooden deck. A large mural of a woman's face is visible on a nearby building, with the surrounding cityscape completing the scene."
+      }
+    ]
+  }
+}
+}

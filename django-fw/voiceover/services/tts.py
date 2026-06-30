@@ -1,19 +1,14 @@
 from __future__ import annotations
 
+import os
 import re
 import tempfile
 from pathlib import Path
 
-import numpy as np
-import soundfile as sf
-import torch
-import torchaudio
-from transformers import AutoTokenizer, VitsModel
+from django.conf import settings
 
-_AUDIO_DIR = Path(__file__).resolve().parent
-VOICES_DIR = _AUDIO_DIR / "voices"
-SUBTITLES_FILE = _AUDIO_DIR / "subtitles.txt"
-OUTPUT_AUDIO_FILE = _AUDIO_DIR / "voiceover.wav"
+# Let unsupported MPS ops fall back to CPU instead of crashing (e.g. MMS-TTS).
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 _XTTS_MODEL = "tts_models/multilingual/multi-dataset/xtts_v2"
 _VC_MODEL = "voice_conversion_models/multilingual/vctk/freevc24"
@@ -22,11 +17,7 @@ _WAVLM_MIN_BYTES = 1_200_000_000
 _REFERENCE_MIN_SECONDS = 6.0
 _REFERENCE_GOOD_SECONDS = 15.0
 
-# ISO 639-1 (or common alias) -> MMS-TTS model suffix (facebook/mms-tts-{suffix}).
-# MMS supports 1100+ languages; this map covers the most common codes. Any valid
-# 3-letter ISO 639-3 code can also be passed via --language (e.g. tam, eng, fra).
 _MMS_LANGUAGES: dict[str, str] = {
-    # South Asia
     "ta": "tam",
     "te": "tel",
     "kn": "kan",
@@ -41,7 +32,6 @@ _MMS_LANGUAGES: dict[str, str] = {
     "ur": "urd",
     "ne": "npi",
     "si": "sin",
-    # Europe
     "en": "eng",
     "fr": "fra",
     "de": "deu",
@@ -79,7 +69,6 @@ _MMS_LANGUAGES: dict[str, str] = {
     "mk": "mkd",
     "bs": "bos",
     "be": "bel",
-    # East / Southeast Asia
     "ja": "jpn",
     "ko": "kor",
     "zh": "cmn",
@@ -94,13 +83,11 @@ _MMS_LANGUAGES: dict[str, str] = {
     "km": "khm",
     "lo": "lao",
     "jv": "jav",
-    # Middle East
     "ar": "ara",
     "fa": "fas",
     "he": "heb",
     "ku": "kmr",
     "ps": "pbt",
-    # Africa
     "sw": "swh",
     "am": "amh",
     "yo": "yor",
@@ -115,23 +102,54 @@ _MMS_LANGUAGES: dict[str, str] = {
     "sn": "sna",
     "st": "sot",
     "tn": "tsn",
-    # Americas
     "qu": "quy",
     "gn": "grn",
     "ht": "hat",
 }
 
-# Languages where Coqui XTTS v2 does direct zero-shot cloning (preferred when available).
 _XTTS_LANGUAGES = frozenset(
     {"en", "es", "fr", "de", "it", "pt", "pl", "tr", "ru", "nl", "cs", "ar", "zh-cn", "ja", "hu", "ko", "hi"}
 )
 
-_mms_models: dict[str, tuple[VitsModel, AutoTokenizer, int]] = {}
+_mms_models: dict[str, tuple[object, object, int]] = {}
 _xtts = None
 _vc = None
 
 
+class TTSError(Exception):
+    """Raised when local TTS synthesis fails."""
+
+
+def _import_torch():
+    import torch
+
+    return torch
+
+
+def _import_numpy():
+    import numpy as np
+
+    return np
+
+
+def _import_soundfile():
+    import soundfile as sf
+
+    return sf
+
+
+def _import_torchaudio():
+    import torchaudio
+
+    return torchaudio
+
+
+def voices_dir() -> Path:
+    return Path(settings.VOICEOVER_VOICES_DIR)
+
+
 def _get_device() -> str:
+    torch = _import_torch()
     if torch.cuda.is_available():
         return "cuda"
     if torch.backends.mps.is_available():
@@ -140,14 +158,29 @@ def _get_device() -> str:
 
 
 def _get_vc_device() -> str:
-    """FreeVC is more stable on CPU/CUDA than on Apple MPS."""
+    torch = _import_torch()
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+
+def _get_xtts_device() -> str:
+    """XTTS has ops unsupported on Apple MPS, so prefer CUDA or CPU."""
+    torch = _import_torch()
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+
+def _get_mms_device() -> str:
+    """MMS-TTS (VITS) has conv ops unsupported on Apple MPS, so avoid it."""
+    torch = _import_torch()
     if torch.cuda.is_available():
         return "cuda"
     return "cpu"
 
 
 def detect_language(text: str) -> str:
-    """Detect the primary language of subtitle text."""
     from langdetect import DetectorFactory, detect
 
     DetectorFactory.seed = 0
@@ -157,9 +190,92 @@ def detect_language(text: str) -> str:
     return lang
 
 
+# Unicode script ranges -> default TTS language code for that script. Kana is
+# listed before the CJK ideograph range so Japanese is matched before Chinese.
+_SCRIPT_RANGES: tuple[tuple[str, int, int], ...] = (
+    ("ta", 0x0B80, 0x0BFF),
+    ("te", 0x0C00, 0x0C7F),
+    ("kn", 0x0C80, 0x0CFF),
+    ("ml", 0x0D00, 0x0D7F),
+    ("si", 0x0D80, 0x0DFF),
+    ("hi", 0x0900, 0x097F),
+    ("bn", 0x0980, 0x09FF),
+    ("gu", 0x0A80, 0x0AFF),
+    ("pa", 0x0A00, 0x0A7F),
+    ("or", 0x0B00, 0x0B7F),
+    ("ar", 0x0600, 0x06FF),
+    ("he", 0x0590, 0x05FF),
+    ("ja", 0x3040, 0x30FF),
+    ("ko", 0xAC00, 0xD7AF),
+    ("th", 0x0E00, 0x0E7F),
+    ("el", 0x0370, 0x03FF),
+    ("ru", 0x0400, 0x04FF),
+    ("zh-cn", 0x4E00, 0x9FFF),
+)
+
+# Languages that share a script: never override between members of one group.
+_SCRIPT_GROUPS: dict[str, frozenset[str]] = {
+    "ta": frozenset({"ta"}),
+    "te": frozenset({"te"}),
+    "kn": frozenset({"kn"}),
+    "ml": frozenset({"ml"}),
+    "si": frozenset({"si"}),
+    "hi": frozenset({"hi", "mr", "ne"}),
+    "bn": frozenset({"bn", "as"}),
+    "gu": frozenset({"gu"}),
+    "pa": frozenset({"pa"}),
+    "or": frozenset({"or"}),
+    "ar": frozenset({"ar", "fa", "ur"}),
+    "he": frozenset({"he"}),
+    "ja": frozenset({"ja"}),
+    "ko": frozenset({"ko"}),
+    "th": frozenset({"th"}),
+    "el": frozenset({"el"}),
+    "ru": frozenset({"ru", "uk", "bg", "sr", "mk", "be"}),
+    "zh-cn": frozenset({"zh", "zh-cn", "zh-tw"}),
+}
+
+
+def _dominant_script_language(text: str, threshold: float = 0.3) -> str | None:
+    """Return the TTS language code for the text's dominant non-Latin script."""
+    counts: dict[str, int] = {}
+    total = 0
+    for char in text:
+        if not char.isalpha():
+            continue
+        total += 1
+        code_point = ord(char)
+        for code, low, high in _SCRIPT_RANGES:
+            if low <= code_point <= high:
+                counts[code] = counts.get(code, 0) + 1
+                break
+
+    if total == 0 or not counts:
+        return None
+
+    code, hits = max(counts.items(), key=lambda item: item[1])
+    if hits / total < threshold:
+        return None
+    return code
+
+
 def _resolve_language(text: str, language: str | None) -> str:
+    script_language = _dominant_script_language(text)
+
     if language:
-        return language.lower()
+        lang = language.lower()
+        if script_language:
+            group = _SCRIPT_GROUPS.get(script_language, frozenset({script_language}))
+            if lang not in group:
+                print(
+                    f"Requested language '{lang}' does not match the text script; "
+                    f"using detected language '{script_language}' instead."
+                )
+                return script_language
+        return lang
+
+    if script_language:
+        return script_language
     return detect_language(text)
 
 
@@ -169,10 +285,9 @@ def _resolve_mms_code(language: str) -> str:
         return _MMS_LANGUAGES[language]
     if len(language) == 3 and language.isalpha():
         return language
-    raise ValueError(
+    raise TTSError(
         f"No local MMS-TTS model mapped for '{language}'. "
-        "Pass a 3-letter ISO 639-3 code with --language (e.g. tam, fra, vie), "
-        "or run: python convert.py --list-languages"
+        "Pass a 3-letter ISO 639-3 code (e.g. tam, fra, vie)."
     )
 
 
@@ -185,7 +300,7 @@ def _backend_for_language(language: str, prefer: str | None, clone: bool) -> str
             return "xtts"
         if language in _MMS_LANGUAGES or (len(language) == 3 and language.isalpha()):
             return "mms_vc"
-        raise ValueError(
+        raise TTSError(
             f"Language '{language}' is not supported for local voice cloning. "
             f"Try a 3-letter MMS code or one of: {', '.join(sorted(set(_MMS_LANGUAGES) | _XTTS_LANGUAGES))}"
         )
@@ -194,24 +309,15 @@ def _backend_for_language(language: str, prefer: str | None, clone: bool) -> str
         return "mms"
     if language in _XTTS_LANGUAGES:
         return "xtts"
-    raise ValueError(
-        f"Language '{language}' is not supported. "
-        "Run: python convert.py --list-languages"
-    )
+    raise TTSError(f"Language '{language}' is not supported.")
 
 
-def list_supported_languages() -> None:
-    xtts = ", ".join(sorted(_XTTS_LANGUAGES))
+def list_supported_languages() -> dict[str, str]:
     mms_only = sorted(code for code in _MMS_LANGUAGES if code not in _XTTS_LANGUAGES)
-    print("Fully local backends (models download once, then run offline):\n")
-    print("XTTS voice cloning:", xtts)
-    print("\nMMS-TTS + voice cloning (1100+ langs via ISO 639-3 codes):")
-    print(", ".join(mms_only))
-    print("\nExamples:")
-    print("  python convert.py -l ta              # Tamil + reference.wav cloning")
-    print("  python convert.py -l fr              # French + reference.wav cloning")
-    print("  python convert.py -l vie             # Vietnamese via 3-letter MMS code")
-    print("  python convert.py --no-clone -l ta   # Tamil without cloning (faster)")
+    return {
+        "xtts": ", ".join(sorted(_XTTS_LANGUAGES)),
+        "mms": ", ".join(mms_only),
+    }
 
 
 def _normalize_speaker_wav(
@@ -225,23 +331,24 @@ def _normalize_speaker_wav(
     resolved = [path.resolve() for path in paths]
     missing = [str(path) for path in resolved if not path.is_file()]
     if missing:
-        raise FileNotFoundError(
+        raise TTSError(
             "Reference voice file(s) not found: "
             + ", ".join(missing)
-            + ". Record 6-30 seconds of clean speech and save it under audio/voices/."
+            + ". Record 6-30 seconds of clean speech and save under audio/voices/."
         )
     _warn_about_reference_quality(resolved)
     return resolved
 
 
 def _default_speaker_wavs() -> list[Path]:
-    wavs = sorted(path for path in VOICES_DIR.glob("*.wav") if path.is_file())
+    wavs = sorted(path for path in voices_dir().glob("*.wav") if path.is_file())
     if wavs:
         return wavs
-    return [VOICES_DIR / "reference.wav"]
+    return [voices_dir() / "reference.wav"]
 
 
 def _audio_duration(path: Path) -> float:
+    sf = _import_soundfile()
     info = sf.info(str(path))
     return float(info.frames / info.samplerate)
 
@@ -264,7 +371,9 @@ def _warn_about_reference_quality(speaker_files: list[Path]) -> None:
         )
 
 
-def _load_audio_mono(path: Path, sample_rate: int) -> np.ndarray:
+def _load_audio_mono(path: Path, sample_rate: int):
+    np = _import_numpy()
+    torchaudio = _import_torchaudio()
     waveform, source_rate = torchaudio.load(str(path))
     if waveform.shape[0] > 1:
         waveform = waveform.mean(dim=0, keepdim=True)
@@ -274,11 +383,13 @@ def _load_audio_mono(path: Path, sample_rate: int) -> np.ndarray:
 
 
 def _prepare_voice_conversion_target(speaker_files: list[Path], output_path: Path, sample_rate: int = 24000) -> Path:
+    np = _import_numpy()
+    sf = _import_soundfile()
     if len(speaker_files) == 1:
         return speaker_files[0]
 
     pause = np.zeros(int(sample_rate * 0.25), dtype=np.float32)
-    parts: list[np.ndarray] = []
+    parts: list = []
     for path in speaker_files:
         audio = _load_audio_mono(path, sample_rate)
         peak = np.max(np.abs(audio)) if len(audio) else 0.0
@@ -321,7 +432,9 @@ def _split_text(text: str, max_chars: int = 220) -> list[str]:
     return chunks or [text]
 
 
-def _get_mms(language: str) -> tuple[VitsModel, AutoTokenizer, int]:
+def _get_mms(language: str):
+    from transformers import AutoTokenizer, VitsModel
+
     mms_code = _resolve_mms_code(language)
     if mms_code not in _mms_models:
         model_id = f"facebook/mms-tts-{mms_code}"
@@ -329,7 +442,7 @@ def _get_mms(language: str) -> tuple[VitsModel, AutoTokenizer, int]:
         model = VitsModel.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         sample_rate = int(model.config.sampling_rate)
-        device = _get_device()
+        device = _get_mms_device()
         model = model.to(device)
         model.eval()
         _mms_models[mms_code] = (model, tokenizer, sample_rate)
@@ -337,18 +450,21 @@ def _get_mms(language: str) -> tuple[VitsModel, AutoTokenizer, int]:
     return _mms_models[mms_code]
 
 
-def _synthesize_mms_chunk(text: str, language: str) -> tuple[np.ndarray, int]:
+def _synthesize_mms_chunk(text: str, language: str):
+    torch = _import_torch()
+    np = _import_numpy()
     model, tokenizer, sample_rate = _get_mms(language)
-    device = _get_device()
+    device = _get_mms_device()
     inputs = tokenizer(text, return_tensors="pt").to(device)
     with torch.no_grad():
         waveform = model(**inputs).waveform.squeeze().cpu().numpy()
     return waveform.astype(np.float32), sample_rate
 
 
-def _synthesize_mms(text: str, language: str) -> tuple[np.ndarray, int]:
+def _synthesize_mms(text: str, language: str):
+    np = _import_numpy()
     chunks = _split_text(text, max_chars=180)
-    parts: list[np.ndarray] = []
+    parts: list = []
     sample_rate = 16000
 
     for index, chunk in enumerate(chunks):
@@ -361,13 +477,39 @@ def _synthesize_mms(text: str, language: str) -> tuple[np.ndarray, int]:
     return np.concatenate(parts), sample_rate
 
 
+_torch_load_patched = False
+
+
+def _enable_trusted_torch_load() -> None:
+    """Force ``weights_only=False`` for Coqui's ``torch.load`` calls.
+
+    PyTorch >=2.6 defaults ``weights_only=True``, which refuses to unpickle the
+    XTTS/FreeVC config classes shipped inside the official Coqui checkpoints.
+    These models come from a trusted source, so full unpickling is safe here.
+    """
+    global _torch_load_patched
+    if _torch_load_patched:
+        return
+
+    torch = _import_torch()
+    original_load = torch.load
+
+    def _patched_load(*args, **kwargs):
+        kwargs.setdefault("weights_only", False)
+        return original_load(*args, **kwargs)
+
+    torch.load = _patched_load
+    _torch_load_patched = True
+
+
 def _get_xtts():
     global _xtts
     if _xtts is None:
+        _enable_trusted_torch_load()
         from TTS.api import TTS
 
         print(f"Loading local XTTS model: {_XTTS_MODEL}")
-        _xtts = TTS(_XTTS_MODEL).to(_get_device())
+        _xtts = TTS(_XTTS_MODEL).to(_get_xtts_device())
     return _xtts
 
 
@@ -378,6 +520,7 @@ def _wavlm_checkpoint_path() -> Path:
 
 
 def _wavlm_checkpoint_valid(path: Path) -> bool:
+    torch = _import_torch()
     if not path.is_file() or path.stat().st_size < _WAVLM_MIN_BYTES:
         return False
     try:
@@ -411,7 +554,7 @@ def _download_wavlm_checkpoint(path: Path) -> None:
 
     if expected_size and downloaded < expected_size:
         partial_path.unlink(missing_ok=True)
-        raise RuntimeError(
+        raise TTSError(
             f"WavLM download incomplete ({downloaded}/{expected_size} bytes). "
             "Check your internet connection and try again."
         )
@@ -431,12 +574,13 @@ def _ensure_wavlm_checkpoint() -> None:
     _download_wavlm_checkpoint(path)
     if not _wavlm_checkpoint_valid(path):
         path.unlink(missing_ok=True)
-        raise RuntimeError("Downloaded WavLM checkpoint is still invalid.")
+        raise TTSError("Downloaded WavLM checkpoint is still invalid.")
 
 
 def _get_vc():
     global _vc
     if _vc is None:
+        _enable_trusted_torch_load()
         from TTS.api import TTS
 
         _ensure_wavlm_checkpoint()
@@ -446,7 +590,7 @@ def _get_vc():
 
 
 def _voice_convert(source_wav: Path, target_wav: Path, output_path: Path) -> None:
-    print("Applying local voice conversion to match reference.wav...")
+    print("Applying local voice conversion to match reference voice...")
     try:
         _get_vc().voice_conversion_to_file(
             source_wav=str(source_wav),
@@ -493,6 +637,7 @@ def _synthesize_xtts(
 
 
 def _synthesize_mms_only(text: str, output_path: Path, language: str) -> None:
+    sf = _import_soundfile()
     print("Synthesizing with local MMS-TTS (no voice cloning)...")
     audio, sample_rate = _synthesize_mms(text, language)
     sf.write(str(output_path), audio, sample_rate)
@@ -504,7 +649,8 @@ def _synthesize_mms_vc(
     output_path: Path,
     language: str,
 ) -> None:
-    print("Synthesizing with local MMS-TTS + voice conversion (cloning reference.wav)...")
+    sf = _import_soundfile()
+    print("Synthesizing with local MMS-TTS + voice conversion...")
     audio, sample_rate = _synthesize_mms(text, language)
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -515,33 +661,24 @@ def _synthesize_mms_vc(
         _voice_convert(source_wav, target_wav, output_path)
 
 
-def subtitles_to_speech(
-    subtitles_path: Path | str = SUBTITLES_FILE,
-    output_path: Path | str = OUTPUT_AUDIO_FILE,
+def synthesize_speech(
+    text: str,
+    output_path: Path | str,
     speaker_wav: Path | str | list[Path | str] | None = None,
     speaker_id: str | None = None,
     language: str | None = None,
     backend: str = "auto",
     clone: bool = True,
     gpt_cond_len: int = 30,
-) -> Path:
-    """Read subtitle text and synthesize speech using fully local models.
+) -> tuple[Path, str, str]:
+    """Synthesize speech from text using fully local models.
 
-  All inference runs on your machine. Models are downloaded once from open
-  model hubs (Meta MMS-TTS, Coqui XTTS/FreeVC), then work offline.
-
-  Backends:
-    - auto   : XTTS cloning for major languages; MMS+VC for all others
-    - xtts   : Coqui XTTS zero-shot cloning (en, es, fr, de, hi, ...)
-    - mms_vc : Meta MMS-TTS + FreeVC voice conversion (ta, te, kn, +1100 langs)
-    - mms    : MMS-TTS only, built-in voice (use --no-clone)
+    Returns (output_path, resolved_language, selected_backend).
     """
-    subtitles_path = Path(subtitles_path)
     output_path = Path(output_path)
-
-    text = subtitles_path.read_text(encoding="utf-8").strip()
+    text = text.strip()
     if not text:
-        raise ValueError(f"No text found in {subtitles_path}")
+        raise TTSError("Text must not be empty.")
 
     resolved_language = _resolve_language(text, language)
     selected_backend = _backend_for_language(resolved_language, backend, clone)
@@ -552,7 +689,7 @@ def subtitles_to_speech(
 
     if selected_backend == "mms":
         _synthesize_mms_only(text, output_path, resolved_language)
-        return output_path
+        return output_path, resolved_language, selected_backend
 
     if speaker_wav is None:
         speaker_wav = _default_speaker_wavs()
@@ -570,54 +707,6 @@ def subtitles_to_speech(
             gpt_cond_len,
         )
     else:
-        raise ValueError(f"Unknown backend: {selected_backend}")
+        raise TTSError(f"Unknown backend: {selected_backend}")
 
-    return output_path
-
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Convert subtitles to cloned speech using fully local AI models."
-    )
-    parser.add_argument(
-        "speaker_wav",
-        nargs="?",
-        default=None,
-        help="Reference voice recording used for cloning (default: all .wav files in audio/voices/)",
-    )
-    parser.add_argument(
-        "--language",
-        "-l",
-        help="Language code: ISO 639-1 (ta, fr, hi) or ISO 639-3 (tam, fra, vie)",
-    )
-    parser.add_argument(
-        "--backend",
-        "-b",
-        choices=["auto", "mms_vc", "mms", "xtts"],
-        default="auto",
-        help="TTS backend (default: auto)",
-    )
-    parser.add_argument(
-        "--no-clone",
-        action="store_true",
-        help="Skip voice cloning; use the built-in MMS voice instead",
-    )
-    parser.add_argument(
-        "--list-languages",
-        action="store_true",
-        help="Show supported language codes and exit",
-    )
-    args = parser.parse_args()
-
-    if args.list_languages:
-        list_supported_languages()
-    else:
-        result = subtitles_to_speech(
-            speaker_wav=args.speaker_wav,
-            language=args.language,
-            backend="mms" if args.no_clone else args.backend,
-            clone=not args.no_clone,
-        )
-        print(f"Saved speech audio to {result}")
+    return output_path, resolved_language, selected_backend

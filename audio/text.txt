@@ -1,0 +1,36 @@
+Loading weights: 100% 824/824 [00:00<00:00, 1692.27it/s]
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Reading video...
+Total frames: 354
+Selected frames: 4
+
+0: 640x384 2 cars, 2496.5ms
+Speed: 8.8ms preprocess, 2496.5ms inference, 2.2ms postprocess per image at shape (1, 3, 640, 384)
+
+Objects:
+['car']
+[transformers] Passing `generation_config` together with generation-related arguments=({'max_new_tokens'}) is deprecated and will be removed in future versions. Please pass either a `generation_config` object OR all generation parameters explicitly, but not both.
+[transformers] Both `max_new_tokens` (=80) and `max_length`(=20) seem to have been set. `max_new_tokens` will take precedence. Please refer to the documentation for more information. (https://huggingface.co/docs/transformers/main/en/main_classes/text_generation)
+
+Description:
+[{'role': 'user', 'content': [{'type': 'image', 'image': <PIL.Image.Image image mode=RGB size=720x1280 at 0x7869FA3673E0>}, {'type': 'text', 'text': '\nDetected Objects:\ncar\n\nDescribe:\n- What is happening in the image.\n- Important objects.\n- Environment.\n- Generate a short human narration.\n'}]}, {'role': 'assistant', 'content': 'The image depicts an urban rooftop scene during what appears to be either dawn or dusk, given the dim lighting. A sleek black sports car is parked on the rooftop, its headlights illuminated, adding a dramatic effect to the scene. The car is positioned near a railing and some greenery, which includes bushes and trees. In the background, there are several tall buildings, including a prominent structure with a large'}]
+
+0: 640x384 2 cars, 2205.1ms
+Speed: 50.4ms preprocess, 2205.1ms inference, 38.3ms postprocess per image at shape (1, 3, 640, 384)
+
+Objects:
+['car']
+[transformers] Both `max_new_tokens` (=80) and `max_length`(=20) seem to have been set. `max_new_tokens` will take precedence. Please refer to the documentation for more information. (https://huggingface.co/docs/transformers/main/en/main_classes/text_generation)
+
+Description:
+[{'role': 'user', 'content': [{'type': 'image', 'image': <PIL.Image.Image image mode=RGB size=720x1280 at 0x7869FC9749E0>}, {'type': 'text', 'text': '\nDetected Objects:\ncar\n\nDescribe:\n- What is happening in the image.\n- Important objects.\n- Environment.\n- Generate a short human narration.\n'}]}, {'role': 'assistant', 'content': 'The image depicts a rooftop scene with two luxury cars parked on a wooden platform. The car in the foreground is a sleek, black sports car with its headlights on, while the car behind it is a black SUV. The background features a cityscape with tall buildings and a large mural of a famous painting on one of the buildings. The sky appears to be overcast, suggesting early morning or late evening'}]
+
+0: 640x384 3 cars, 2461.0ms
+Speed: 155.5ms preprocess, 2461.0ms inference, 81.9ms postprocess per image at shape (1, 3, 640, 384)
+
+Objects:
+['car']
+[transformers] Both `max_new_tokens` (=80) and `max_length`(=20) seem to have been set. `max_new_tokens` will take precedence. Please refer to the documentation for more information. (https://huggingface.co/docs/transformers/main/en/main_classes/text_generation)
+
+Description:
+[{'role': 'user', 'content': [{'type': 'image', 'image': <PIL.Image.Image image mode=RGB size=720x1280 at 0x7869E82A4BC0>}, {'type': 'text', 'text': '\nDetected Objects:\ncar\n\nDescribe:\n- What is happening in the image.\n- Important objects.\n- Environment.\n- Generate a short human narration.\n'}]}, {'role': 'assistant', 'content': "The image depicts a luxurious rooftop scene with two high-end sports cars parked on a wooden deck. The foreground features a sleek, black Lamborghini with its headlights on, positioned next to a black Rolls-Royce SUV. Both cars are modern and appear to be well-maintained.\n\nIn the background, there is a large mural of a woman's face on the side of a building, adding an"}]

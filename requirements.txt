@@ -11,4 +11,3 @@ torchaudio
 langdetect
 soundfile
 numpy
-edge-tts
