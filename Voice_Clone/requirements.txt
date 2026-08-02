@@ -1,0 +1,13 @@
+torch
+torchaudio
+TTS
+edge-tts
+numpy
+soundfile
+fastapi
+uvicorn
+pydantic
+librosa
+scipy
+pydub
+requests
