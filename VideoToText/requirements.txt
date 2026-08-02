@@ -1,0 +1,15 @@
+opencv-python==5.0.0.93
+ultralytics==8.4.90
+
+torch==2.13.0
+torchvision==0.28.0
+
+transformers==5.13.0
+accelerate==1.14.0
+huggingface_hub==1.22.0
+sentencepiece==0.2.1
+safetensors==0.8.0
+
+numpy==2.5.1
+pillow==12.3.0
+tqdm==4.68.4
