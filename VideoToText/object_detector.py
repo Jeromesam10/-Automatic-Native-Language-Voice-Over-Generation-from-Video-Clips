@@ -1,6 +1,13 @@
+import os
+
 from ultralytics import YOLO
 
-model = YOLO("yolo11x.pt")
+MODEL_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "yolo11x.pt"
+)
+
+model = YOLO(MODEL_PATH)
 
 
 def detect_objects(frame):

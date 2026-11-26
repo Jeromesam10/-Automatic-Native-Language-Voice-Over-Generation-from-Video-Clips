@@ -1,6 +1,7 @@
 torch
 torchaudio
-TTS
+coqui-tts
+langdetect
 edge-tts
 numpy
 soundfile

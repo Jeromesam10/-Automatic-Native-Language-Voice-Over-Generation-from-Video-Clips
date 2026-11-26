@@ -1,5 +1,52 @@
-from state import WorkflowState
 import requests
+
+from config import (
+    DEFAULT_LANGUAGE,
+    DEFAULT_SPEAKER_REFERENCE,
+    NARRATE_API_URL,
+    NARRATE_TIMEOUT,
+    TRANSLATOR_API_URL,
+    TRANSLATOR_TIMEOUT,
+    VIDEO_API_URL,
+    VIDEO_TIMEOUT,
+    VOICE_API_URL,
+    VOICE_TIMEOUT,
+)
+from state import WorkflowState
+
+
+class ServiceError(Exception):
+    """Raised when a downstream agent service fails.
+
+    `status` is the HTTP status to return to our caller: a downstream 4xx
+    (bad input, e.g. "no speech in this video") stays a 4xx; anything else
+    (service down, crash) becomes 502.
+    """
+
+    def __init__(self, message, status=502):
+        super().__init__(message)
+        self.status = status
+
+
+def _post(name, url, payload, timeout):
+    try:
+        response = requests.post(url, json=payload, timeout=timeout)
+    except requests.RequestException as exc:
+        raise ServiceError(f"{name} unreachable at {url}: {exc}") from exc
+
+    if response.status_code != 200:
+        try:
+            detail = response.json().get("detail", response.text)
+        except ValueError:
+            detail = response.text
+        status = response.status_code if 400 <= response.status_code < 500 else 502
+        raise ServiceError(f"{name} error {response.status_code}: {detail}", status)
+
+    return response.json()
+
+
+def _language(state: WorkflowState):
+    return state.get("language") or DEFAULT_LANGUAGE
 
 
 # -------------------------
@@ -9,29 +56,22 @@ import requests
 def agent1(state: WorkflowState):
 
     print("\n========== VIDEO AGENT ==========")
-    print("Input Received:", state["input"])
+    print("Video:", state["input"])
 
-    # ---------- OPTION 1 ----------
-    # Dummy output (current)
-    state["agent1_output"] = state["input"]
+    result = _post(
+        "Video API",
+        VIDEO_API_URL,
+        {"video_path": state["input"]},
+        VIDEO_TIMEOUT,
+    )
 
-    # ---------- OPTION 2 ----------
-    # When Video API is ready, replace the above line with:
-    #
-    # response = requests.post(
-    #     "http://127.0.0.1:8002/video",
-    #     json={
-    #         "video_path": state["input"]
-    #     }
-    # )
-    #
-    # result = response.json()
-    #
-    # state["agent1_output"] = result["caption"]
+    caption = (result.get("caption") or "").strip()
+    if not caption:
+        raise ServiceError("Video API returned an empty caption")
 
-    print("Caption :", state["agent1_output"])
+    print("Caption :", caption)
 
-    return state
+    return {"agent1_output": caption}
 
 
 # -------------------------
@@ -42,28 +82,24 @@ def agent2(state: WorkflowState):
 
     print("\n========== TRANSLATOR AGENT ==========")
 
-    response = requests.post(
-        "http://127.0.0.1:8000/translate",
-        json={
+    result = _post(
+        "Translator API",
+        TRANSLATOR_API_URL,
+        {
             "text": state["agent1_output"],
-            "language": "ta"
-        }
+            "language": _language(state),
+            "source_language": "en",   # VideoToText captions are English
+        },
+        TRANSLATOR_TIMEOUT,
     )
 
-    if response.status_code != 200:
-        raise Exception(
-            f"Translator API Error\n{response.text}"
-        )
+    print("Translated Text :", result["translated_text"])
+    print("Preview Audio   :", result.get("audio_path") or result.get("audio_error"))
 
-    result = response.json()
-
-    state["translated_text"] = result["translated_text"]
-    state["translated_audio"] = result["audio_path"]
-
-    print("Translated Text :", state["translated_text"])
-    print("Audio File      :", state["translated_audio"])
-
-    return state
+    return {
+        "translated_text": result["translated_text"],
+        "translated_audio": result.get("audio_path"),
+    }
 
 
 # -------------------------
@@ -74,31 +110,53 @@ def agent3(state: WorkflowState):
 
     print("\n========== VOICE CLONE AGENT ==========")
 
-    response = requests.post(
-        "http://127.0.0.1:8001/voice",
-        json={
+    result = _post(
+        "Voice Clone API",
+        VOICE_API_URL,
+        {
             "translated_text": state["translated_text"],
-            "speaker_reference": "voices/reference.wav",
-            "language": "ta"
-        }
+            "speaker_reference": state.get("speaker_reference")
+            or DEFAULT_SPEAKER_REFERENCE,
+            "language": _language(state),
+        },
+        VOICE_TIMEOUT,
     )
 
-    if response.status_code != 200:
-        raise Exception(
-            f"Voice Clone API Error\n{response.text}"
-        )
+    voice_output = result["voice_path"]
 
-    result = response.json()
+    print("Voice File :", voice_output)
 
-    state["voice_output"] = result["voice_path"]
+    return {"voice_output": voice_output}
 
-    state["final_output"] = {
-        "caption": state["agent1_output"],
-        "translated_text": state["translated_text"],
-        "translated_audio": state["translated_audio"],
-        "voice_output": state["voice_output"]
+
+# -------------------------
+# Agent 4 - Compose narrated video
+# -------------------------
+
+def agent4(state: WorkflowState):
+
+    print("\n========== VIDEO COMPOSE AGENT ==========")
+
+    result = _post(
+        "Narrate API",
+        NARRATE_API_URL,
+        {
+            "video_path": state["input"],
+            "voice_path": state["voice_output"],
+        },
+        NARRATE_TIMEOUT,
+    )
+
+    print("Narrated Video :", result["narrated_video"])
+
+    return {
+        "narrated_video": result["narrated_video"],
+        "final_output": {
+            "narrated_video": result["narrated_video"],
+            "caption": state["agent1_output"],
+            "translated_text": state["translated_text"],
+            "translated_audio": state.get("translated_audio"),
+            "voice_output": state["voice_output"],
+            "warnings": result.get("warnings", []),
+        },
     }
-
-    print("Voice File :", state["voice_output"])
-
-    return state

@@ -1,0 +1,9 @@
+# Runs in the project's root .venv (translation code is shared with Dubbing/).
+fastapi
+uvicorn
+pydantic
+transformers
+sentencepiece
+torch
+deep-translator
+gtts

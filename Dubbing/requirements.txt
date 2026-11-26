@@ -1,0 +1,22 @@
+# Install demucs separately WITHOUT its dependencies, or pip spends a very long
+# time back-tracking over its old torchaudio pins:
+#   pip install --no-deps demucs openunmix dora-search
+#   pip install julius einops lameenc omegaconf retrying submitit treetable
+faster-whisper
+torch
+transformers
+huggingface_hub<2
+# lip sync (see Lipsync/README.md for model downloads)
+diffusers
+librosa
+opencv-python
+sentencepiece
+imageio-ffmpeg
+soundfile
+numpy
+deep-translator
+edge-tts
+requests
+fastapi
+uvicorn
+pydantic

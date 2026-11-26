@@ -12,6 +12,20 @@ import torch
 import torchaudio
 from TTS.api import TTS
 
+
+def _soundfile_load(path, *args, **kwargs):
+    """Drop-in for torchaudio.load backed by soundfile (libsndfile reads WAV,
+    FLAC, OGG and MP3). From torch 2.9, torchaudio.load needs torchcodec,
+    which on Windows also needs FFmpeg's shared DLLs installed system-wide;
+    this avoids that dependency. Returns (tensor[channels, frames], rate)."""
+    audio, rate = sf.read(str(path), dtype="float32", always_2d=True)
+    return torch.from_numpy(audio.T.copy()), rate
+
+
+# XTTS (TTS.tts.models.xtts.load_audio) and this module both call
+# torchaudio.load, so patch it once here.
+torchaudio.load = _soundfile_load
+
 _AUDIO_DIR = Path(__file__).resolve().parent
 VOICES_DIR = _AUDIO_DIR / "voices"
 SUBTITLES_FILE = _AUDIO_DIR / "subtitles.txt"
@@ -166,7 +180,7 @@ def _normalize_speaker_wav(
         raise FileNotFoundError(
             "Reference voice file(s) not found: "
             + ", ".join(missing)
-            + ". Record 6–30 seconds of clean speech and save it under audio/voices/."
+            + ". Record 6–30 seconds of clean speech and save it as Voice_Clone/voices/reference.wav."
         )
     return resolved
 
@@ -302,14 +316,40 @@ def subtitles_to_speech(
     Hindi, and other international languages use XTTS voice cloning.
     """
     subtitles_path = Path(subtitles_path)
+    text = subtitles_path.read_text(encoding="utf-8").strip()
+    if not text:
+        raise ValueError(f"No text found in {subtitles_path}")
+
+    return text_to_speech(
+        text=text,
+        output_path=output_path,
+        speaker_wav=speaker_wav,
+        speaker_id=speaker_id,
+        language=language,
+        voice=voice,
+        gpt_cond_len=gpt_cond_len,
+    )
+
+
+def text_to_speech(
+    text: str,
+    output_path: Path | str = OUTPUT_AUDIO_FILE,
+    speaker_wav: Path | str | list[Path | str] | None = None,
+    speaker_id: str | None = None,
+    language: str | None = None,
+    voice: str | None = None,
+    gpt_cond_len: int = 30,
+) -> Path:
+    """Synthesize `text` in a cloned voice (see `subtitles_to_speech`)."""
     output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     if speaker_wav is None:
         speaker_wav = VOICES_DIR / "reference.wav"
 
-    text = subtitles_path.read_text(encoding="utf-8").strip()
+    text = (text or "").strip()
     if not text:
-        raise ValueError(f"No text found in {subtitles_path}")
+        raise ValueError("No text to synthesize")
 
     speaker_files = _normalize_speaker_wav(speaker_wav)
     resolved_language = _resolve_language(text, language)

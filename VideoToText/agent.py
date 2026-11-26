@@ -1,5 +1,4 @@
-from video_reader import read_video
-from frame_selector import select_frames
+from video_reader import read_sampled_frames
 from object_detector import detect_objects
 from qwen_vision import describe_scene
 from event_builder import build_events
@@ -11,15 +10,10 @@ def run(video_path, frame_interval):
 
     print("Reading video...")
 
-    frames = read_video(video_path)
+    # Sample while decoding so only the frames we describe are kept in memory.
+    selected_frames, total = read_sampled_frames(video_path, frame_interval)
 
-    print(f"Total Frames : {len(frames)}")
-
-    selected_frames = select_frames(
-        frames,
-        frame_interval
-    )
-
+    print(f"Total Frames : {total}")
     print(f"Selected Frames : {len(selected_frames)}")
 
     descriptions = []
